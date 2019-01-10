@@ -6,7 +6,6 @@
 #include <ESP8266WebServer.h>     //Local WebServer used to serve the configuration portal
 #include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager WiFi Configuration Magic
 
-#include <PubSubClient.h>
 #include <MD_MAX72xx.h>
 #include <SPI.h>
 #include <ArduinoJson.h>
@@ -86,22 +85,24 @@ void setup() {
   }
 
 
+  // id/name, placeholder/prompt, default, length
+  WiFiManagerParameter custom_mqtt_server("server", "mqtt server", config.mqtt_srv, 64);
+  WiFiManagerParameter custom_mqtt_port("port", "mqtt port", config.mqtt_port, 5);
+  WiFiManagerParameter custom_mqtt_user("user", "mqtt user", config.mqtt_user, 20);
+  WiFiManagerParameter custom_mqtt_key("password", "mqtt password", config.mqtt_key, 32);
+  WiFiManagerParameter custom_mqtt_anonymous("anonymous", "mqtt anonymous", (char*)config.anonymous, 1);
+  
   WiFiManager wifiManager;
+
   wifiManager.setAPCallback(configModeCallback);
   wifiManager.setSaveConfigCallback(saveConfigCallback);
   // 3 min to configure AP
   wifiManager.setConfigPortalTimeout(180);
 
-  // id/name, placeholder/prompt, default, length
-  WiFiManagerParameter custom_mqtt_server("server", "mqtt server", config.mqtt_srv, 64);
   wifiManager.addParameter(&custom_mqtt_server);
-  WiFiManagerParameter custom_mqtt_port("port", "mqtt port", config.mqtt_port, 5);
   wifiManager.addParameter(&custom_mqtt_port);
-  WiFiManagerParameter custom_mqtt_user("user", "mqtt user", config.mqtt_user, 20);
   wifiManager.addParameter(&custom_mqtt_user);
-  WiFiManagerParameter custom_mqtt_key("password", "mqtt password", config.mqtt_key, 32);
   wifiManager.addParameter(&custom_mqtt_key);
-  WiFiManagerParameter custom_mqtt_anonymous("anonymous", "mqtt anonymous", (char*)config.anonymous, 1);
   wifiManager.addParameter(&custom_mqtt_anonymous);
 
   // try to connect to WiFi. If it fails it starts in Access Point mode.  
@@ -116,11 +117,11 @@ void setup() {
 
   Serial.println("Connected to WiFi");
   // read updated parameters
-  strcpy(config.mqtt_srv, custom_mqtt_server.getValue());
-  strcpy(config.mqtt_port, custom_mqtt_port.getValue());
-  strcpy(config.mqtt_user, custom_mqtt_user.getValue());
-  strcpy(config.mqtt_key, custom_mqtt_key.getValue());
-  config.anonymous = custom_mqtt_anonymous.getValue();
+  // strcpy(config.mqtt_srv, custom_mqtt_server.getValue());
+  // strcpy(config.mqtt_port, custom_mqtt_port.getValue());
+  // strcpy(config.mqtt_user, custom_mqtt_user.getValue());
+  // strcpy(config.mqtt_key, custom_mqtt_key.getValue());
+  // config.anonymous = custom_mqtt_anonymous.getValue();
 
   // save custom parameters to FS
   if(shouldSaveConfig){
@@ -142,6 +143,7 @@ void setup() {
     json.printTo(configFile);
     configFile.close();
   }
+
   Serial.println("local ip:");
   Serial.println(WiFi.localIP());
 
