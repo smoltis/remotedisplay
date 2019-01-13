@@ -5,35 +5,34 @@
 #include <ESP8266WebServer.h>     //Local WebServer used to serve the configuration portal
 #include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager WiFi Configuration Magic
 #include <ArduinoJson.h>
-
 #include <PubSubClient.h>
-
 #include <MD_MAX72xx.h>
 #include <SPI.h>
 
-// macro
-#define PRINT(s, v) { Serial.print(F(s)); Serial.print(v); }
-// usage: PRINT("\nProcessing new message: ", message);
-
-// LED display setup
+//// LED display setup
 #define HARDWARE_TYPE MD_MAX72XX::GENERIC_HW
 #define MAX_DEVICES  4
-
-#define CLK_PIN   14  // or SCK
-#define DATA_PIN  13  // or MOSI
-#define CS_PIN    5
-
-// SPI hardware interface
+////
+#define CLK_PIN   D5  // or SCK
+#define DATA_PIN  D7  // or MOSI
+#define CS_PIN    D2
+//
+//// SPI hardware interface
 MD_MAX72XX mx = MD_MAX72XX(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
-// Text parameters
-#define CHAR_SPACING  1 // pixels between characters
+//// Text parameters
+const uint8_t MESG_SIZE = 255;
+const uint8_t CHAR_SPACING = 1;
+const uint8_t SCROLL_DELAY = 75;
+
+char curMessage[MESG_SIZE];
+char newMessage[MESG_SIZE];
+bool newMessageAvailable = false;
 
 // Function Prototypes
 
 void readConfigFile();
 void writeConfigFile();
 void enterConfigMode();
-void printText(uint8_t modStart, uint8_t modEnd, char *pMsg);
 
 //flag for saving data
 bool shouldSaveConfig = false;
@@ -48,7 +47,7 @@ struct Config {
 
 void set_defaults(){
   Serial.println("Setting defaults");
-  strcpy(config.mqtt_srv, "test.mosquitto.org");
+  strcpy(config.mqtt_srv, "MQTT.local");
   strcpy(config.mqtt_port, "1883");
   strcpy(config.mqtt_user, "admin");
   strcpy(config.mqtt_key, "admin");
@@ -70,92 +69,187 @@ void saveConfigCallback () {
   shouldSaveConfig = true;
 }
 
-// mqtt
-WiFiClient wifiClient;
-PubSubClient mqttClient(wifiClient);
+long lastReconnectAttempt = 0;
 
-void mqtt_msg_callback(char* topic, byte* payload, unsigned int length) {
+void callback(char* topic, byte* payload, unsigned int length) {
   // handle message arrived
-  char* msg = "";
+  
   Serial.print("Message arrived [");
   Serial.print(topic);
   Serial.print("] ");
-
+  
+  char* msg = "";
   for (int i = 0; i < length; i++) {
     Serial.print((char)payload[i]);
     msg += (char)payload[i];
+    yield();
   }
   Serial.println();
-  printText(0, MAX_DEVICES-1, msg);
+
+  strcpy(newMessage, msg);
+  newMessageAvailable = true;
 }
 
-long lastReconnectAttempt = 0;
+//   
+WiFiClient wifiClient;
+PubSubClient mqttClient(wifiClient);
+
 
 boolean reconnect() {
   // connect 
   bool connectionState;
   if(!config.anonymous) {
-    connectionState = mqttClient.connect("esp8266Client", config.mqtt_user, config.mqtt_key);
+    Serial.println("MQTT with auth");
+    connectionState = mqttClient.connect("esp8266Client-hfd363d", config.mqtt_user, config.mqtt_key);
   } else {
-    connectionState = mqttClient.connect("esp8266Client");
+    Serial.println("MQTT anonymous");
+    connectionState = mqttClient.connect("esp8266Client-hfd363d");
   }
   // subscribe/publish
   if (connectionState) {
+    Serial.println("MQTT connected, publish");
     // Once connected, publish an announcement...
     mqttClient.publish("outTopic-47487","hello world");
     // ... and resubscribe
+    Serial.println("MQTT connected, subscribe");
     mqttClient.subscribe("inTopic-stan-47487");
   }
   return mqttClient.connected();
 }
 
+
+
+uint8_t scrollDataSource(uint8_t dev, MD_MAX72XX::transformType_t t)
+// Callback function for data that is required for scrolling into the display
+{
+  static enum { S_IDLE, S_NEXT_CHAR, S_SHOW_CHAR, S_SHOW_SPACE } state = S_IDLE;
+  static char *p;
+  static uint16_t curLen, showLen;
+  static uint8_t  cBuf[8];
+  uint8_t colData = 0;
+
+  // finite state machine to control what we do on the callback
+  switch (state)
+  {
+  case S_IDLE: // reset the message pointer and check for new message to load
+    //PRINTS("\nS_IDLE");
+    p = curMessage;      // reset the pointer to start of message
+    if (newMessageAvailable)  // there is a new message waiting
+    {
+      strcpy(curMessage, newMessage); // copy it in
+      newMessageAvailable = false;
+    }
+    state = S_NEXT_CHAR;
+    break;
+
+  case S_NEXT_CHAR: // Load the next character from the font table
+    //PRINTS("\nS_NEXT_CHAR");
+    if (*p == '\0')
+      state = S_IDLE;
+    else
+    {
+      showLen = mx.getChar(*p++, sizeof(cBuf) / sizeof(cBuf[0]), cBuf);
+      curLen = 0;
+      state = S_SHOW_CHAR;
+    }
+    break;
+
+  case S_SHOW_CHAR: // display the next part of the character
+    //PRINTS("\nS_SHOW_CHAR");
+    colData = cBuf[curLen++];
+    if (curLen < showLen)
+      break;
+
+    // set up the inter character spacing
+    showLen = (*p != '\0' ? CHAR_SPACING : (MAX_DEVICES*COL_SIZE)/2);
+    curLen = 0;
+    state = S_SHOW_SPACE;
+    // fall through
+
+  case S_SHOW_SPACE:  // display inter-character spacing (blank column)
+    //PRINT("\nS_ICSPACE: ", curLen);
+    //PRINT("/", showLen);
+    curLen++;
+    if (curLen == showLen)
+      state = S_NEXT_CHAR;
+    break;
+
+  default:
+    state = S_IDLE;
+  }
+
+  return(colData);
+}
+
+void scrollText(void)
+{
+  static uint32_t  prevTime = 0;
+
+  // Is it time to scroll the text?
+  if (millis() - prevTime >= SCROLL_DELAY)
+  {
+    mx.transform(MD_MAX72XX::TSL);  // scroll along - the callback will load all the data
+    prevTime = millis();      // starting point for next time
+  }
+}
+
 void setup() {
   Serial.begin(115200);
-
-  printText(0, MAX_DEVICES-1, "Conf");
-
+  Serial.println("Config...");
   readConfigFile();
   
   enterConfigMode();
-
-  printText(0, MAX_DEVICES-1, "Mqtt");
-
+  Serial.println("MQTT setup...");
   // setup mqtt
   mqttClient.setServer(config.mqtt_srv, strtol(config.mqtt_port, NULL, 0));
-
+  mqttClient.setCallback(callback);
   lastReconnectAttempt = 0;
-
-  printText(0, MAX_DEVICES-1, ".....");
+  // Display initialization
+  mx.begin();
+  mx.setShiftDataInCallback(scrollDataSource);
+  //mx.setShiftDataOutCallback(scrollDataSink);
+  curMessage[0] = newMessage[0] = '\0';
 }
 
 int retry = 0;
 
 void loop() {
+  if (Serial.available() > 0) {
+   char userInput = (char)Serial.read();
+   if (userInput == 'c') {
+       retry = 0;
+       onDemandPortal();
+   }
+  }
   if (!mqttClient.connected()) {
     long now = millis();
     if (now - lastReconnectAttempt > 5000) {
       lastReconnectAttempt = now;
       // Attempt to reconnect
-      Serial.println("MQTT reconnecting...");
+      Serial.print("MQTT reconnecting...");
+      Serial.println(retry);
+      yield();
+      retry++;
+      if (retry > 10) { 
+        retry = 0;
+        enterConfigMode();
+      }
       if (reconnect()) {
         lastReconnectAttempt = 0;
         retry = 0;
       }
-      retry++;
-      if (retry > 10) {
-        enterConfigMode();
-      }
     }
   } else {
     // Client connected
-    Serial.println("MQTT connected");
+    yield();
+    delay(10);
     mqttClient.loop();
   }
-
+  scrollText();
 }
 
 void enterConfigMode() {
-
+  Serial.println("CONFIG MODE ACTIVATED...");
   // id/name, placeholder/prompt, default, length
   WiFiManagerParameter custom_mqtt_server("server", "mqtt server", config.mqtt_srv, 64);
   WiFiManagerParameter custom_mqtt_port("port", "mqtt port", config.mqtt_port, 5);
@@ -183,7 +277,7 @@ void enterConfigMode() {
   // try to connect to WiFi. If it fails it starts in Access Point mode.  
   // goes into blocking loop awaiting configuration
   if (!wifiManager.autoConnect("LEDConfig", "admin")) {
-    Serial.println("failed to connected and hit timeout");
+    Serial.println("failed to connected and hit timeout, will reset");
     delay(3000);
     // reset and try again or put into deep sleep
     ESP.reset();
@@ -284,64 +378,55 @@ void writeConfigFile() {
   }
 }
 
-void printText(uint8_t modStart, uint8_t modEnd, char *pMsg)
-// Print the text string to the LED matrix modules specified.
-// Message area is padded with blank columns after printing.
-{
-  uint8_t   state = 0;
-  uint8_t   curLen;
-  uint16_t  showLen;
-  uint8_t   cBuf[8];
-  int16_t   col = ((modEnd + 1) * COL_SIZE) - 1;
-
-  mx.control(modStart, modEnd, MD_MAX72XX::UPDATE, MD_MAX72XX::OFF);
-
-  do     // finite state machine to print the characters in the space available
-  {
-    switch(state)
-    {
-      case 0: // Load the next character from the font table
-        // if we reached end of message, reset the message pointer
-        if (*pMsg == '\0')
-        {
-          showLen = col - (modEnd * COL_SIZE);  // padding characters
-          state = 2;
-          break;
-        }
-
-        // retrieve the next character form the font file
-        showLen = mx.getChar(*pMsg++, sizeof(cBuf)/sizeof(cBuf[0]), cBuf);
-        curLen = 0;
-        state++;
-        // !! deliberately fall through to next state to start displaying
-
-      case 1: // display the next part of the character
-        mx.setColumn(col--, cBuf[curLen++]);
-
-        // done with font character, now display the space between chars
-        if (curLen == showLen)
-        {
-          showLen = CHAR_SPACING;
-          state = 2;
-        }
-        break;
-
-      case 2: // initialize state for displaying empty columns
-        curLen = 0;
-        state++;
-        // fall through
-
-      case 3:	// display inter-character spacing or end of message padding (blank columns)
-        mx.setColumn(col--, 0);
-        curLen++;
-        if (curLen == showLen)
-          state = 0;
-        break;
-
-      default:
-        col = -1;   // this definitely ends the do loop
+void onDemandPortal() {
+    WiFiManagerParameter custom_mqtt_server("server", "mqtt server", config.mqtt_srv, 64);
+    WiFiManagerParameter custom_mqtt_port("port", "mqtt port", config.mqtt_port, 5);
+    WiFiManagerParameter custom_mqtt_user("user", "mqtt user", config.mqtt_user, 20);
+    WiFiManagerParameter custom_mqtt_key("password", "mqtt password", config.mqtt_key, 32);
+    char customhtml[24] = "type=\"checkbox\"";
+    if (config.anonymous) {
+        strcat(customhtml, " checked");
     }
-  } while (col >= (modStart * COL_SIZE));
+    WiFiManagerParameter custom_mqtt_anonymous("anonymous", "anonymous", "T", 2, customhtml);
 
-  mx.control(modStart, modEnd, MD_MAX72XX::UPDATE, MD_MAX72XX::ON);
+    //WiFiManager
+    //Local intialization. Once its business is done, there is no need to keep it around
+    WiFiManager wifiManager;
+
+    //reset settings - for testing
+    //wifiManager.resetSettings();
+
+    //sets timeout until configuration portal gets turned off
+    //useful to make it all retry or go to sleep
+    //in seconds
+    //wifiManager.setTimeout(120);
+
+    //it starts an access point with the specified name
+    //here  "AutoConnectAP"
+    //and goes into a blocking loop awaiting configuration
+
+    //WITHOUT THIS THE AP DOES NOT SEEM TO WORK PROPERLY WITH SDK 1.5 , update to at least 1.5.1
+    //WiFi.mode(WIFI_STA);
+     wifiManager.setConfigPortalTimeout(180);
+
+     wifiManager.addParameter(&custom_mqtt_server);
+     wifiManager.addParameter(&custom_mqtt_port);
+     wifiManager.addParameter(&custom_mqtt_user);
+     wifiManager.addParameter(&custom_mqtt_key);
+     wifiManager.addParameter(&custom_mqtt_anonymous);
+    
+    if (!wifiManager.startConfigPortal("OnDemandAP")) {
+      Serial.println("failed to connect and hit timeout");
+      delay(3000);
+      //reset and try again, or maybe put it to deep sleep
+      ESP.reset();
+      delay(5000);
+    }
+    strcpy(config.mqtt_srv, custom_mqtt_server.getValue());
+    strcpy(config.mqtt_port, custom_mqtt_port.getValue()); 
+    strcpy(config.mqtt_user, custom_mqtt_user.getValue());
+    strcpy(config.mqtt_key, custom_mqtt_key.getValue());
+    config.anonymous = (strncmp(custom_mqtt_anonymous.getValue(), "T", 1) == 0);
+    writeConfigFile();
+  
 }
