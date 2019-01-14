@@ -1,41 +1,51 @@
+// SPI file System for config persistance
 #include <FS.h>
 #include <Arduino.h>
-#include <ESP8266WiFi.h>          //ESP8266 Core WiFi Library (you most likely already have this in your sketch)
-#include <DNSServer.h>            //Local DNS Server used for redirecting all requests to the configuration portal
-#include <ESP8266WebServer.h>     //Local WebServer used to serve the configuration portal
-#include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager WiFi Configuration Magic
+#include <ESP8266WiFi.h>          
+//Local DNS Server used for redirecting all requests to the configuration portal
+#include <DNSServer.h>
+//Local WebServer used to serve the configuration portal
+#include <ESP8266WebServer.h>
+// WiFi and paramters configuration portal
+#include <WiFiManager.h>
+// JSON serialization for config file        
 #include <ArduinoJson.h>
-#include <PubSubClient.h>
+// MQTT library
+#include "Adafruit_MQTT.h"
+#include "Adafruit_MQTT_Client.h"
+// LED Matrix display library  
 #include <MD_MAX72xx.h>
 #include <SPI.h>
 
-//// LED display setup
+// LED display setup, HW constants
 #define HARDWARE_TYPE MD_MAX72XX::GENERIC_HW
 #define MAX_DEVICES  4
 ////
 #define CLK_PIN   D5  // or SCK
 #define DATA_PIN  D7  // or MOSI
 #define CS_PIN    D2
-//
-//// SPI hardware interface
+
+// SPI hardware interface
 MD_MAX72XX mx = MD_MAX72XX(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
-//// Text parameters
+// Text parameter constants
 const uint8_t MESG_SIZE = 255;
 const uint8_t CHAR_SPACING = 1;
-const uint8_t SCROLL_DELAY = 75;
+const uint8_t SCROLL_DELAY = 1;
 
+// global varialbes
 char curMessage[MESG_SIZE];
 char newMessage[MESG_SIZE];
 bool newMessageAvailable = false;
+int retry = 0;
+bool shouldSaveConfig = false;
+long lastReconnectAttempt = 0;
 
 // Function Prototypes
-
 void readConfigFile();
 void writeConfigFile();
 void enterConfigMode();
-
-//flag for saving data
-bool shouldSaveConfig = false;
+void MQTT_connect();
+void onDemandPortal();
 //config
 struct Config {
     char mqtt_srv[64];
@@ -54,7 +64,6 @@ void set_defaults(){
   config.anonymous = true;
 }
 
-
 // callbacks
 void configModeCallback (WiFiManager *myWiFiManager) {
   Serial.println("Entered config mode");
@@ -69,59 +78,64 @@ void saveConfigCallback () {
   shouldSaveConfig = true;
 }
 
-long lastReconnectAttempt = 0;
+// MQTT new message handling callback
+//void callback(char* topic, byte* payload, unsigned int length) {
+//  // handle message arrived
+//  
+//  Serial.print("Message arrived [");
+//  Serial.print(topic);
+//  Serial.print("] ");
+//  
+//  char* msg = "";
+//  for (int i = 0; i < length; i++) {
+//    Serial.print((char)payload[i]);
+//    msg += (char)payload[i];
+//    yield();
+//  }
+//  Serial.println();
+//
+//  strcpy(newMessage, msg);
+//  newMessageAvailable = true;
+//}
 
-void callback(char* topic, byte* payload, unsigned int length) {
-  // handle message arrived
-  
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  
-  char* msg = "";
-  for (int i = 0; i < length; i++) {
-    Serial.print((char)payload[i]);
-    msg += (char)payload[i];
-    yield();
-  }
-  Serial.println();
-
-  strcpy(newMessage, msg);
-  newMessageAvailable = true;
-}
-
-//   
+// MQTT client instance  
 WiFiClient wifiClient;
-PubSubClient mqttClient(wifiClient);
+//PubSubClient mqttClient(wifiClient);
+// Setup the MQTT client class by passing in the WiFi client and MQTT server and login details.
+Adafruit_MQTT_Client mqtt(&wifiClient, "test.mosquitto.org", 1883);
+// Setup a feed called 'time' for subscribing to current time
+Adafruit_MQTT_Subscribe incomingFeed = Adafruit_MQTT_Subscribe(&mqtt, "d3fum7ay9sl-incoming");
+//Adafruit_MQTT_Publish satusFeed = Adafruit_MQTT_Publish(&mqtt, ""
+//boolean reconnect() {
+//  // connect 
+//  bool connectionState;
+//  if(!config.anonymous) {
+//    Serial.print("MQTT with auth ");
+//    Serial.print(config.mqtt_srv);
+//    Serial.println();
+//    mqttClient.setServer(config.mqtt_srv, strtol(config.mqtt_port, NULL, 0));
+//    connectionState = mqttClient.connect("esp8266Client-hfd363d", config.mqtt_user, config.mqtt_key);
+//  } else {
+//    Serial.println("MQTT anonymous ");
+//    Serial.print(config.mqtt_srv);
+//    Serial.println();
+//    mqttClient.setServer(config.mqtt_srv, strtol(config.mqtt_port, NULL, 0));
+//    connectionState = mqttClient.connect("esp8266Client-hfd363d");
+//  }
+//  // subscribe/publish
+//  if (connectionState) {
+//    Serial.println("MQTT connected, publish");
+//    // Once connected, publish an announcement...
+//    mqttClient.publish("outTopic-47487","hello world");
+//    // ... and resubscribe
+//    Serial.println("MQTT connected, subscribe");
+//    mqttClient.subscribe("inTopic-stan-47487");
+//  }
+//  return mqttClient.connected();
+//}
 
-
-boolean reconnect() {
-  // connect 
-  bool connectionState;
-  if(!config.anonymous) {
-    Serial.println("MQTT with auth");
-    connectionState = mqttClient.connect("esp8266Client-hfd363d", config.mqtt_user, config.mqtt_key);
-  } else {
-    Serial.println("MQTT anonymous");
-    connectionState = mqttClient.connect("esp8266Client-hfd363d");
-  }
-  // subscribe/publish
-  if (connectionState) {
-    Serial.println("MQTT connected, publish");
-    // Once connected, publish an announcement...
-    mqttClient.publish("outTopic-47487","hello world");
-    // ... and resubscribe
-    Serial.println("MQTT connected, subscribe");
-    mqttClient.subscribe("inTopic-stan-47487");
-  }
-  return mqttClient.connected();
-}
-
-
-
-uint8_t scrollDataSource(uint8_t dev, MD_MAX72XX::transformType_t t)
+uint8_t scrollDataSource(uint8_t dev, MD_MAX72XX::transformType_t t) {
 // Callback function for data that is required for scrolling into the display
-{
   static enum { S_IDLE, S_NEXT_CHAR, S_SHOW_CHAR, S_SHOW_SPACE } state = S_IDLE;
   static char *p;
   static uint16_t curLen, showLen;
@@ -181,10 +195,8 @@ uint8_t scrollDataSource(uint8_t dev, MD_MAX72XX::transformType_t t)
   return(colData);
 }
 
-void scrollText(void)
-{
+void scrollText(void) {
   static uint32_t  prevTime = 0;
-
   // Is it time to scroll the text?
   if (millis() - prevTime >= SCROLL_DELAY)
   {
@@ -193,16 +205,26 @@ void scrollText(void)
   }
 }
 
+void incomingCallback(char *data, uint16_t len) {
+  Serial.println("Received: ");
+  Serial.println(data);
+  strcpy(newMessage, data);
+  newMessageAvailable = true;
+}
+
 void setup() {
   Serial.begin(115200);
+  delay(10);
   Serial.println("Config...");
   readConfigFile();
   
   enterConfigMode();
   Serial.println("MQTT setup...");
   // setup mqtt
-  mqttClient.setServer(config.mqtt_srv, strtol(config.mqtt_port, NULL, 0));
-  mqttClient.setCallback(callback);
+  //mqttClient.setServer(config.mqtt_srv, strtol(config.mqtt_port, NULL, 0));
+  //mqttClient.setCallback(callback);
+  incomingFeed.setCallback(incomingCallback);
+  mqtt.subscribe(&incomingFeed);
   lastReconnectAttempt = 0;
   // Display initialization
   mx.begin();
@@ -210,9 +232,7 @@ void setup() {
   //mx.setShiftDataOutCallback(scrollDataSink);
   curMessage[0] = newMessage[0] = '\0';
 }
-
-int retry = 0;
-
+uint32_t x=0;
 void loop() {
   if (Serial.available() > 0) {
    char userInput = (char)Serial.read();
@@ -221,31 +241,69 @@ void loop() {
        onDemandPortal();
    }
   }
-  if (!mqttClient.connected()) {
-    long now = millis();
-    if (now - lastReconnectAttempt > 5000) {
-      lastReconnectAttempt = now;
-      // Attempt to reconnect
-      Serial.print("MQTT reconnecting...");
-      Serial.println(retry);
-      yield();
-      retry++;
-      if (retry > 10) { 
-        retry = 0;
-        enterConfigMode();
-      }
-      if (reconnect()) {
-        lastReconnectAttempt = 0;
-        retry = 0;
-      }
+//  if (!mqttClient.connected()) {
+//    long now = millis();
+//    if (now - lastReconnectAttempt > 5000) {
+//      lastReconnectAttempt = now;
+//      // Attempt to reconnect
+//      Serial.print("MQTT reconnecting...");
+//      Serial.println(retry);
+//      yield();
+//      retry++;
+//      if (retry > 10) { 
+//        retry = 0;
+//        enterConfigMode();
+//      }
+//      if (reconnect()) {
+//        lastReconnectAttempt = 0;
+//        retry = 0;
+//      }
+//    }
+//  } else {
+//    // Client connected
+//    yield();
+//    delay(10);
+//    mqttClient.loop();
+//  }
+  
+  MQTT_connect();
+  mqtt.processPackets(70);
+
+  static uint32_t  prevTime = 0;
+  // Is it time to scroll the text?
+  if (millis() - prevTime >= 350000) {
+    if(! mqtt.ping()) {
+      mqtt.disconnect();
     }
-  } else {
-    // Client connected
-    yield();
-    delay(10);
-    mqttClient.loop();
+  prevTime = millis();      // starting point for next time
   }
+
   scrollText();
+}
+
+void MQTT_connect() {
+  int8_t ret;
+
+  // Stop if already connected.
+  if (mqtt.connected()) {
+    return;
+  }
+
+  Serial.print("Connecting to MQTT... ");
+
+  uint8_t retries = 3;
+  while ((ret = mqtt.connect()) != 0) { // connect will return 0 for connected
+       Serial.println(mqtt.connectErrorString(ret));
+       Serial.println("Retrying MQTT connection in 10 seconds...");
+       mqtt.disconnect();
+       delay(10000);  // wait 10 seconds
+       retries--;
+       if (retries == 0) {
+         // basically die and wait for WDT to reset me
+         while (1);
+       }
+  }
+  Serial.println("MQTT Connected!");
 }
 
 void enterConfigMode() {
