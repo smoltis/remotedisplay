@@ -1,0 +1,49 @@
+{
+    "name": "Adafruit MQTT Library", 
+    "version": "0.20.3", 
+    "keywords": [
+        "communication"
+    ], 
+    "description": "MQTT library that supports the FONA, ESP8266, Yun, and generic Arduino Client hardware.", 
+    "frameworks": [
+        "arduino"
+    ], 
+    "platforms": [
+        "atmelavr", 
+        "atmelsam", 
+        "espressif32", 
+        "espressif8266", 
+        "intel_arc32", 
+        "microchippic32", 
+        "nordicnrf51", 
+        "nordicnrf52", 
+        "ststm32", 
+        "teensy", 
+        "timsp430"
+    ], 
+    "authors": [
+        {
+            "email": "info@adafruit.com", 
+            "url": null, 
+            "maintainer": true, 
+            "name": "Adafruit"
+        }
+    ], 
+    "repository": {
+        "type": "git", 
+        "url": "https://github.com/adafruit/Adafruit_MQTT_Library"
+    }, 
+    "homepage": null, 
+    "export": {
+        "include": null, 
+        "exclude": [
+            "extras", 
+            "docs", 
+            "tests", 
+            "test", 
+            "*.doxyfile", 
+            "*.pdf"
+        ]
+    }, 
+    "id": 1092
+}

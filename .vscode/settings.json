@@ -1,6 +1,6 @@
 {
     "terminal.integrated.env.linux": {
-        "PATH": "/home/stan/.platformio/penv/bin:/home/stan/.platformio/penv:/home/stan/.local/bin:/home/stan/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "PATH": "/home/stan/.platformio/penv/bin:/home/stan/.platformio/penv:/home/stan/.local/bin:/home/stan/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/home/stan/.dotnet/tools:/home/stan/.dotnet/tools",
         "PLATFORMIO_CALLER": "vscode"
     },
     "python.linting.pylintEnabled": false

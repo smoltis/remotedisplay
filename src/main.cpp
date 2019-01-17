@@ -1,3 +1,12 @@
+// TODO: add publishing to status topic
+// TODO: extend message size and adjust the number of subscriptions
+// TODO: clean up debug parts and comments
+// TODO: find out why config file routines are not showing up debug output
+// TODO: add ESP chip ID as a client and part of the topic name for pub and sub
+// TODO: add status publishing to outgoing topic
+// TODO: tweak defaults for MQTT library
+
+
 // SPI file System for config persistance
 #include <FS.h>
 #include <Arduino.h>
@@ -102,9 +111,15 @@ void saveConfigCallback () {
 WiFiClient wifiClient;
 //PubSubClient mqttClient(wifiClient);
 // Setup the MQTT client class by passing in the WiFi client and MQTT server and login details.
-Adafruit_MQTT_Client mqtt(&wifiClient, "test.mosquitto.org", 1883);
+//Adafruit_MQTT_Client mqtt(&wifiClient, "test.mosquitto.org", 1883);
+Adafruit_MQTT_Client mqtt(&wifiClient, "ESP.getChipId");
 // Setup a feed called 'time' for subscribing to current time
-Adafruit_MQTT_Subscribe incomingFeed = Adafruit_MQTT_Subscribe(&mqtt, "d3fum7ay9sl-incoming");
+Adafruit_MQTT_Subscribe incomingFeed = Adafruit_MQTT_Subscribe(&mqtt, "ESP.getChipId/incoming");
+
+Adafruit_MQTT_Publish statusFeed = Adafruit_MQTT_Publish(&mqtt, "ESP.getChipId/status");
+
+//Adafruit_MQTT_Publish outgoingFeed = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/photocell");
+
 //Adafruit_MQTT_Publish satusFeed = Adafruit_MQTT_Publish(&mqtt, ""
 //boolean reconnect() {
 //  // connect 
@@ -212,6 +227,14 @@ void incomingCallback(char *data, uint16_t len) {
   newMessageAvailable = true;
 }
 
+void publishStatus() {
+  if (! statusFeed.publish("OK")) {
+    Serial.println(F("Failed"));
+  } else {
+    Serial.println(F("OK!"));
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   delay(10);
@@ -223,6 +246,7 @@ void setup() {
   // setup mqtt
   //mqttClient.setServer(config.mqtt_srv, strtol(config.mqtt_port, NULL, 0));
   //mqttClient.setCallback(callback);
+  mqtt.setServer(config.mqtt_srv, strtol(config.mqtt_port, NULL, 0));
   incomingFeed.setCallback(incomingCallback);
   mqtt.subscribe(&incomingFeed);
   lastReconnectAttempt = 0;
@@ -241,30 +265,6 @@ void loop() {
        onDemandPortal();
    }
   }
-//  if (!mqttClient.connected()) {
-//    long now = millis();
-//    if (now - lastReconnectAttempt > 5000) {
-//      lastReconnectAttempt = now;
-//      // Attempt to reconnect
-//      Serial.print("MQTT reconnecting...");
-//      Serial.println(retry);
-//      yield();
-//      retry++;
-//      if (retry > 10) { 
-//        retry = 0;
-//        enterConfigMode();
-//      }
-//      if (reconnect()) {
-//        lastReconnectAttempt = 0;
-//        retry = 0;
-//      }
-//    }
-//  } else {
-//    // Client connected
-//    yield();
-//    delay(10);
-//    mqttClient.loop();
-//  }
   
   MQTT_connect();
   mqtt.processPackets(70);
@@ -279,6 +279,7 @@ void loop() {
   }
 
   scrollText();
+  publishStatus();
 }
 
 void MQTT_connect() {
